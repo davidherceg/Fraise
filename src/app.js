@@ -53,8 +53,8 @@ class TitanBot extends Client {
       const dbInstance = await initializeDatabase();
       this.db = dbInstance.db;
 
-      // Check database status and report
       const dbStatus = this.db.getStatus();
+
       if (dbStatus.isDegraded) {
         logger.warn('');
         logger.warn('╔═══════════════════════════════════════════════════════╗');
@@ -93,7 +93,9 @@ class TitanBot extends Client {
       const databaseMode = dbStatus.isDegraded
         ? 'Optional in-memory mode (data resets after restart)'
         : 'Connected (persistent data enabled)';
+
       const handlerSummary = `${this.buttons.size} buttons, ${this.selectMenus.size} menus, ${this.modals.size} modals`;
+
       startupLog(
         `ONLINE ✅ | ${this.commands.size} commands loaded | ${handlerSummary} | Database: ${databaseMode}`
       );
@@ -119,12 +121,14 @@ class TitanBot extends Client {
       if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
         res.header('Access-Control-Allow-Origin', origin || '*');
       }
+
       res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
       res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
       if (req.method === 'OPTIONS') {
         return res.sendStatus(200);
       }
+
       next();
     });
 
@@ -141,19 +145,27 @@ class TitanBot extends Client {
         requestCounts.set(ip, []);
       }
 
-      const times = requestCounts.get(ip).filter(t => t > windowStart);
+      const times = requestCounts
+        .get(ip)
+        .filter(t => t > windowStart);
 
       if (times.length >= maxRequests) {
-        return res.status(429).json({ error: 'Too many requests' });
+        return res.status(429).json({
+          error: 'Too many requests'
+        });
       }
 
       times.push(now);
       requestCounts.set(ip, times);
+
       next();
     });
 
     app.get('/health', (req, res) => {
-      const dbStatus = this.db?.getStatus?.() || { isDegraded: 'unknown' };
+      const dbStatus = this.db?.getStatus?.() || {
+        isDegraded: 'unknown'
+      };
+
       const status = {
         status: 'healthy',
         timestamp: new Date().toISOString(),
@@ -164,11 +176,16 @@ class TitanBot extends Client {
           type: dbStatus.connectionType
         }
       };
+
       res.status(200).json(status);
     });
 
     app.get('/ready', (req, res) => {
-      const dbStatus = this.db?.getStatus?.() || { isDegraded: true, connectionType: 'none' };
+      const dbStatus = this.db?.getStatus?.() || {
+        isDegraded: true,
+        connectionType: 'none'
+      };
+
       const isReady = this.isReady() && !dbStatus.isDegraded;
 
       const metrics = {
@@ -193,28 +210,49 @@ class TitanBot extends Client {
 
       res.status(503).json({
         ready: false,
-        reason: !this.isReady() ? 'Bot not Ready' : 'Database degraded',
+        reason: !this.isReady()
+          ? 'Bot not Ready'
+          : 'Database degraded',
         metrics,
       });
     });
 
+    // Needed so Tickety can send JSON data to the webhook.
     app.use(express.json());
 
+    // ============================================================
+    // TICKETY WEBHOOK
+    // ============================================================
     app.post('/tickety-webhook', (req, res) => {
       const token = req.headers.authorization;
 
+      // Verify the secret Tickety HTTP Events token.
       if (
-  token !== process.env.TICKETY_HTTP_TOKEN &&
-  token !== `Bearer ${process.env.TICKETY_HTTP_TOKEN}`
-) {
-  return res.status(401).json({ error: 'Unauthorized' });
-}
+        token !== process.env.TICKETY_HTTP_TOKEN &&
+        token !== `Bearer ${process.env.TICKETY_HTTP_TOKEN}`
+      ) {
+        console.log('TICKETY WEBHOOK: Unauthorized request');
+        return res.status(401).json({
+          error: 'Unauthorized'
+        });
+      }
 
-      console.log('TICKETY EVENT RECEIVED:', JSON.stringify(req.body, null, 2));
+      // Print the complete Tickety event so we can inspect
+      // the exact structure before implementing auto-whitelist.
+      console.log(
+        'TICKETY EVENT RECEIVED:',
+        JSON.stringify(req.body, null, 2)
+      );
 
-      res.status(200).json({ received: true });
+      // Tell Tickety that the event was successfully received.
+      res.status(200).json({
+        received: true
+      });
     });
 
+    // ============================================================
+    // ROOT
+    // ============================================================
     app.get('/', (req, res) => {
       res.status(200).json({
         message: 'TitanBot System Online',
@@ -225,31 +263,62 @@ class TitanBot extends Client {
 
     const startServer = (port, attempt = 0) => {
       let hasStartedListening = false;
+
       const server = app.listen(port, host, () => {
         hasStartedListening = true;
         this.webServer = server;
-        startupLog(`✅ Web Server running on ${host}:${port}`);
-        startupLog(`Health endpoint: http://${host}:${port}/health`);
-        startupLog(`Ready endpoint: http://${host}:${port}/ready`);
+
+        startupLog(
+          `✅ Web Server running on ${host}:${port}`
+        );
+
+        startupLog(
+          `Health endpoint: http://${host}:${port}/health`
+        );
+
+        startupLog(
+          `Ready endpoint: http://${host}:${port}/ready`
+        );
       });
 
       server.on('error', (error) => {
         const errorCode = error?.code || 'UNKNOWN_ERROR';
-        const errorMessage = error?.message || 'Unknown server error';
+        const errorMessage =
+          error?.message || 'Unknown server error';
 
-        if (!hasStartedListening && errorCode === 'EADDRINUSE' && attempt < maxPortRetryAttempts) {
+        if (
+          !hasStartedListening &&
+          errorCode === 'EADDRINUSE' &&
+          attempt < maxPortRetryAttempts
+        ) {
           const nextPort = port + 1;
-          startupLog(`Port ${port} is already in use. Trying port ${nextPort}...`);
-          setTimeout(() => startServer(nextPort, attempt + 1), 250);
+
+          startupLog(
+            `Port ${port} is already in use. Trying port ${nextPort}...`
+          );
+
+          setTimeout(
+            () => startServer(nextPort, attempt + 1),
+            250
+          );
+
           return;
         }
 
-        if (hasStartedListening && errorCode === 'EADDRINUSE') {
-          logger.warn(`Web server reported a duplicate bind warning on ${host}:${port}, but the bot remains online.`);
+        if (
+          hasStartedListening &&
+          errorCode === 'EADDRINUSE'
+        ) {
+          logger.warn(
+            `Web server reported a duplicate bind warning on ${host}:${port}, but the bot remains online.`
+          );
+
           return;
         }
 
-        logger.error(`❌ Web server error on port ${port} (${errorCode}): ${errorMessage}`);
+        logger.error(
+          `❌ Web server error on port ${port} (${errorCode}): ${errorMessage}`
+        );
 
         if (!hasStartedListening) {
           process.exit(1);
@@ -261,74 +330,154 @@ class TitanBot extends Client {
   }
 
   setupCronJobs() {
-    cron.schedule('0 6 * * *', runSafeTask('birthday_check', () => checkBirthdays(this)));
-    cron.schedule('* * * * *', runSafeTask('giveaway_check', () => checkGiveaways(this)));
-    cron.schedule('*/15 * * * *', runSafeTask('counter_update', () => this.updateAllCounters()));
+    cron.schedule(
+      '0 6 * * *',
+      runSafeTask(
+        'birthday_check',
+        () => checkBirthdays(this)
+      )
+    );
+
+    cron.schedule(
+      '* * * * *',
+      runSafeTask(
+        'giveaway_check',
+        () => checkGiveaways(this)
+      )
+    );
+
+    cron.schedule(
+      '*/15 * * * *',
+      runSafeTask(
+        'counter_update',
+        () => this.updateAllCounters()
+      )
+    );
   }
 
   async updateAllCounters() {
     if (!this.db) {
-      logger.warn('Database not available for counter updates');
+      logger.warn(
+        'Database not available for counter updates'
+      );
       return;
     }
 
     for (const [guildId, guild] of this.guilds.cache) {
       try {
-        const counters = await getServerCounters(this, guildId);
+        const counters = await getServerCounters(
+          this,
+          guildId
+        );
+
         const validCounters = [];
         const orphanedCounters = [];
 
         for (const counter of counters) {
-          if (counter && counter.type && counter.channelId && counter.enabled !== false) {
-            const channel = guild.channels.cache.get(counter.channelId);
+          if (
+            counter &&
+            counter.type &&
+            counter.channelId &&
+            counter.enabled !== false
+          ) {
+            const channel =
+              guild.channels.cache.get(counter.channelId);
+
             if (channel) {
               validCounters.push(counter);
-              await updateCounter(this, guild, counter);
+              await updateCounter(
+                this,
+                guild,
+                counter
+              );
             } else {
               orphanedCounters.push(counter);
-              logger.info(`Removing orphaned counter ${counter.id} (type: ${counter.type}, deleted channel: ${counter.channelId}) from guild ${guildId}`);
+
+              logger.info(
+                `Removing orphaned counter ${counter.id} (type: ${counter.type}, deleted channel: ${counter.channelId}) from guild ${guildId}`
+              );
             }
           }
         }
 
-        // Save cleaned counters if any were orphaned
         if (orphanedCounters.length > 0) {
-          await saveServerCounters(this, guildId, validCounters);
-          logger.info(`Cleaned up ${orphanedCounters.length} orphaned counter(s) from guild ${guildId} during scheduled update`);
+          await saveServerCounters(
+            this,
+            guildId,
+            validCounters
+          );
+
+          logger.info(
+            `Cleaned up ${orphanedCounters.length} orphaned counter(s) from guild ${guildId} during scheduled update`
+          );
         }
       } catch (error) {
-        logger.error(`Error updating counters for guild ${guildId}:`, error);
+        logger.error(
+          `Error updating counters for guild ${guildId}:`,
+          error
+        );
       }
     }
   }
 
   async loadHandlers() {
     startupLog('Loading handlers...');
+
     const handlers = [
-      { path: 'events', type: 'default', required: true },
-      { path: 'interactions', type: 'default', required: true }
+      {
+        path: 'events',
+        type: 'default',
+        required: true
+      },
+      {
+        path: 'interactions',
+        type: 'default',
+        required: true
+      }
     ];
 
     for (const handler of handlers) {
       try {
-        startupLog(`Loading handler: ${handler.path}`);
-        const module = await import(`./handlers/loaders/${handler.path}.js`);
+        startupLog(
+          `Loading handler: ${handler.path}`
+        );
+
+        const module = await import(
+          `./handlers/loaders/${handler.path}.js`
+        );
+
         const loaderFn = handler.type.startsWith('named:')
-          ? module[handler.type.split(':')[1]]
+          ? module[
+              handler.type.split(':')[1]
+            ]
           : module.default;
 
         if (typeof loaderFn === 'function') {
           await loaderFn(this);
-          startupLog(`✅ Loaded ${handler.path}`);
+
+          startupLog(
+            `✅ Loaded ${handler.path}`
+          );
         } else {
-          throw new Error(`Invalid loader export from ${handler.path}`);
+          throw new Error(
+            `Invalid loader export from ${handler.path}`
+          );
         }
       } catch (error) {
         if (handler.required) {
-          logger.error(`❌ Failed to load required handler ${handler.path}:`, error.message);
+          logger.error(
+            `❌ Failed to load required handler ${handler.path}:`,
+            error.message
+          );
+
           throw error;
-        } else if (error.code !== 'MODULE_NOT_FOUND') {
-          logger.warn(`⚠️  Failed to load optional handler ${handler.path}:`, error.message);
+        } else if (
+          error.code !== 'MODULE_NOT_FOUND'
+        ) {
+          logger.warn(
+            `⚠️  Failed to load optional handler ${handler.path}:`,
+            error.message
+          );
         }
       }
     }
@@ -336,21 +485,35 @@ class TitanBot extends Client {
 
   async registerCommands() {
     try {
-      await registerSlashCommands(this, { clientId: this.config.bot.clientId });
+      await registerSlashCommands(this, {
+        clientId: this.config.bot.clientId
+      });
     } catch (error) {
-      logger.error('Error registering commands:', error);
+      logger.error(
+        'Error registering slash commands:',
+        error
+      );
     }
   }
 
   async shutdown(reason = 'UNKNOWN') {
-    shutdownLog(`Bot is shutting down (${reason})...`);
+    shutdownLog(
+      `Bot is shutting down (${reason})...`
+    );
+
     logger.info(`\n${'='.repeat(60)}`);
-    logger.info(`🛑 Graceful Shutdown Initiated (${reason})`);
+    logger.info(
+      `🛑 Graceful Shutdown Initiated (${reason})`
+    );
     logger.info(`${'='.repeat(60)}`);
 
     try {
       logger.info('Stopping cron jobs...');
-      cron.getTasks().forEach(task => task.stop());
+
+      cron.getTasks().forEach(task =>
+        task.stop()
+      );
+
       logger.info('✅ Cron jobs stopped');
 
       logger.info('Stopping music players...');
@@ -359,38 +522,69 @@ class TitanBot extends Client {
 
       if (this.webServer) {
         logger.info('Closing web server...');
-        await new Promise((resolve) => this.webServer.close(resolve));
+
+        await new Promise(resolve =>
+          this.webServer.close(resolve)
+        );
+
         logger.info('✅ Web server closed');
       }
 
-      // Close database connection
       if (this.db && this.db.db) {
-        logger.info('Closing database connection...');
+        logger.info(
+          'Closing database connection...'
+        );
+
         try {
           if (this.db.db.pool) {
             await this.db.db.pool.end();
-            logger.info('✅ Database connection closed');
+
+            logger.info(
+              '✅ Database connection closed'
+            );
           }
         } catch (error) {
-          logger.warn('Error closing database pool:', error.message);
+          logger.warn(
+            'Error closing database pool:',
+            error.message
+          );
         }
       }
 
-      logger.info('Destroying Discord client...');
+      logger.info(
+        'Destroying Discord client...'
+      );
+
       if (this.isReady()) {
         try {
           this.destroy();
-          logger.info('✅ Discord client destroyed');
+
+          logger.info(
+            '✅ Discord client destroyed'
+          );
         } catch (error) {
-          logger.warn('Discord client destroy warning (non-critical):', error.message);
+          logger.warn(
+            'Discord client destroy warning (non-critical):',
+            error.message
+          );
         }
       }
 
-      logger.info('✅ Graceful shutdown complete');
-      shutdownLog('Bot stopped successfully.');
+      logger.info(
+        '✅ Graceful shutdown complete'
+      );
+
+      shutdownLog(
+        'Bot stopped successfully.'
+      );
+
       process.exit(0);
     } catch (error) {
-      logger.error('Error during graceful shutdown:', error);
+      logger.error(
+        'Error during graceful shutdown:',
+        error
+      );
+
       process.exit(1);
     }
   }
@@ -400,40 +594,87 @@ try {
   const bot = new TitanBot();
 
   const setupShutdown = () => {
-    process.on('SIGTERM', () => bot.shutdown('SIGTERM'));
-    process.on('SIGINT', () => bot.shutdown('SIGINT'));
+    process.on('SIGTERM', () =>
+      bot.shutdown('SIGTERM')
+    );
 
-    process.on('uncaughtException', (error) => {
-      // Process state may be corrupt after an uncaught throw; log and shut down cleanly.
-      handleTaskError('uncaught_exception', error, { fatal: true });
-      bot.shutdown('UNCAUGHT_EXCEPTION');
-    });
+    process.on('SIGINT', () =>
+      bot.shutdown('SIGINT')
+    );
 
-    process.on('unhandledRejection', (reason) => {
-      const code = reason?.code;
-      if (code === 10062 || code === 40060 || code === 50027) {
-        logger.warn('Recoverable Discord interaction rejection:', reason?.message || reason);
-        return;
+    process.on(
+      'uncaughtException',
+      (error) => {
+        handleTaskError(
+          'uncaught_exception',
+          error,
+          { fatal: true }
+        );
+
+        bot.shutdown(
+          'UNCAUGHT_EXCEPTION'
+        );
       }
-      if (reason?.message?.includes('Queue is empty')) {
-        return;
-      }
+    );
 
-      // A stray rejection is a bug to fix, not a reason to take the bot down.
-      // Log loudly with full context; the central task handler categorizes it.
-      handleTaskError('unhandled_rejection', reason instanceof Error ? reason : new Error(String(reason)), {
-        errorCode: ErrorCodes.UNHANDLED_REJECTION,
-      });
-    });
+    process.on(
+      'unhandledRejection',
+      (reason) => {
+        const code = reason?.code;
+
+        if (
+          code === 10062 ||
+          code === 40060 ||
+          code === 50027
+        ) {
+          logger.warn(
+            'Recoverable Discord interaction rejection:',
+            reason?.message || reason
+          );
+
+          return;
+        }
+
+        if (
+          reason?.message?.includes(
+            'Queue is empty'
+          )
+        ) {
+          return;
+        }
+
+        handleTaskError(
+          'unhandled_rejection',
+          reason instanceof Error
+            ? reason
+            : new Error(String(reason)),
+          {
+            errorCode:
+              ErrorCodes.UNHANDLED_REJECTION,
+          }
+        );
+      }
+    );
   };
 
   setupShutdown();
+
   bot.start().catch((error) => {
-    logger.error('Fatal error during bot startup:', error);
-    bot.shutdown('STARTUP_ERROR');
+    logger.error(
+      'Fatal error during bot startup:',
+      error
+    );
+
+    bot.shutdown(
+      'STARTUP_ERROR'
+    );
   });
 } catch (error) {
-  logger.error('Fatal error during bot startup:', error);
+  logger.error(
+    'Fatal error during bot startup:',
+    error
+  );
+
   process.exit(1);
 }
 
