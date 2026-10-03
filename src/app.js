@@ -210,7 +210,7 @@ class TitanBot extends Client {
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
-      logger.info('Tickety HTTP Event received:', req.body);
+      console.log('TICKETY EVENT RECEIVED:', JSON.stringify(req.body, null, 2));
 
       res.status(200).json({ received: true });
     });
