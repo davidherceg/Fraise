@@ -203,9 +203,12 @@ class TitanBot extends Client {
     app.post('/tickety-webhook', (req, res) => {
       const token = req.headers.authorization;
 
-      if (token !== `Bearer ${process.env.TICKETY_HTTP_TOKEN}`) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
+      if (
+  token !== process.env.TICKETY_HTTP_TOKEN &&
+  token !== `Bearer ${process.env.TICKETY_HTTP_TOKEN}`
+) {
+  return res.status(401).json({ error: 'Unauthorized' });
+}
 
       logger.info('Tickety HTTP Event received:', req.body);
 
