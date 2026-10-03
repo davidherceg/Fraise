@@ -41,6 +41,12 @@ class TitanBot extends Client {
     this.modals = new Collection();
     this.cooldowns = new Collection();
     this.db = null;
+
+    // Temporarily stores Tickety applications.
+    // Key = Tickety applicationId
+    // Value = Minecraft IGN and submitter information.
+    this.ticketyApplications = new Map();
+
     this.rest = new REST({ version: '10' }).setToken(config.bot.token);
   }
 
@@ -217,7 +223,7 @@ class TitanBot extends Client {
       });
     });
 
-    // Needed so Tickety can send JSON data to the webhook.
+    // Parse JSON requests before the Tickety webhook.
     app.use(express.json());
 
     // ============================================================
@@ -226,25 +232,133 @@ class TitanBot extends Client {
     app.post('/tickety-webhook', (req, res) => {
       const token = req.headers.authorization;
 
-      // Verify the secret Tickety HTTP Events token.
+      // Check Tickety HTTP Events token.
       if (
         token !== process.env.TICKETY_HTTP_TOKEN &&
         token !== `Bearer ${process.env.TICKETY_HTTP_TOKEN}`
       ) {
         console.log('TICKETY WEBHOOK: Unauthorized request');
+
         return res.status(401).json({
           error: 'Unauthorized'
         });
       }
 
-      // Print the complete Tickety event so we can inspect
-      // the exact structure before implementing auto-whitelist.
+      const event = req.body;
+      const eventType = event?.type;
+      const payload = event?.payload;
+
       console.log(
         'TICKETY EVENT RECEIVED:',
-        JSON.stringify(req.body, null, 2)
+        JSON.stringify(event, null, 2)
       );
 
-      // Tell Tickety that the event was successfully received.
+      // ------------------------------------------------------------
+      // APPLICATION SUBMITTED
+      // ------------------------------------------------------------
+      if (eventType === 'application.submit') {
+        const applicationId = payload?.applicationId;
+        const submitterId = payload?.submitterId;
+        const questions = payload?.questions;
+
+        if (!applicationId) {
+          console.log(
+            'TICKETY: application.submit received without applicationId'
+          );
+
+          return res.status(200).json({
+            received: true
+          });
+        }
+
+        let minecraftIGN = null;
+
+        if (Array.isArray(questions)) {
+          for (const question of questions) {
+            const questionText = String(
+              question?.question || ''
+            ).trim().toLowerCase();
+
+            if (
+              questionText ===
+              'what is your minecraft java ign (in-game username)'
+            ) {
+              minecraftIGN = String(
+                question?.answer || question?.answerRaw || ''
+              ).trim();
+
+              break;
+            }
+          }
+        }
+
+        if (minecraftIGN) {
+          this.ticketyApplications.set(applicationId, {
+            applicationId,
+            submitterId,
+            minecraftIGN,
+            submittedAt: new Date().toISOString()
+          });
+
+          console.log(
+            `TICKETY: Saved application ${applicationId} for Minecraft IGN "${minecraftIGN}"`
+          );
+        } else {
+          console.log(
+            `TICKETY: Could not find Minecraft IGN for application ${applicationId}`
+          );
+        }
+      }
+
+      // ------------------------------------------------------------
+      // APPLICATION ACCEPTED
+      // ------------------------------------------------------------
+      if (eventType === 'application.accept') {
+        const applicationId = payload?.applicationId;
+
+        if (!applicationId) {
+          console.log(
+            'TICKETY: application.accept received without applicationId'
+          );
+
+          return res.status(200).json({
+            received: true
+          });
+        }
+
+        const application =
+          this.ticketyApplications.get(applicationId);
+
+        if (!application) {
+          console.log(
+            `TICKETY: No stored application found for ${applicationId}`
+          );
+
+          return res.status(200).json({
+            received: true
+          });
+        }
+
+        const minecraftIGN = application.minecraftIGN;
+
+        console.log(
+          `TICKETY: Application accepted! Minecraft IGN = "${minecraftIGN}"`
+        );
+
+        // ----------------------------------------------------------
+        // IMPORTANT:
+        // We are NOT running the Minecraft whitelist command yet.
+        // We first verify that the correct IGN is being detected.
+        // ----------------------------------------------------------
+        console.log(
+          `TICKETY: READY TO WHITELIST "${minecraftIGN}"`
+        );
+
+        // Remove the application from temporary storage.
+        this.ticketyApplications.delete(applicationId);
+      }
+
+      // Always tell Tickety that the event was received.
       res.status(200).json({
         received: true
       });
@@ -385,6 +499,7 @@ class TitanBot extends Client {
 
             if (channel) {
               validCounters.push(counter);
+
               await updateCounter(
                 this,
                 guild,
